@@ -1,0 +1,1 @@
+/home/ruvasqm/dev/hold-my-beer/crates/fluid_simulation_wasm/target/wasm32-unknown-unknown/release/fluid_simulation_wasm.wasm: /home/ruvasqm/dev/hold-my-beer/crates/fluid_simulation_wasm/src/lib.rs /home/ruvasqm/dev/hold-my-beer/crates/fluid_simulation_wasm/src/utils.rs

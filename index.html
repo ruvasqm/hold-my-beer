@@ -1,13 +1,435 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Vite App</title>
-  </head>
-  <body>
-    <div id="app"></div>
-    <script type="module" src="/src/main.js"></script>
-  </body>
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <link rel="icon" type="image/png" href="/favicon-96x96.png" sizes="96x96" />
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <link rel="shortcut icon" href="/favicon.ico" />
+  <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+  <meta name="apple-mobile-web-app-title" content="Hold my Beer" />
+  <link rel="manifest" href="/site.webmanifest" />
+  <title>Digital Beer Glass - Generic Sensor API</title>
+  <style>
+    /* Basic Reset & Fullscreen */
+    html,
+    body {
+      height: 100%;
+      width: 100%;
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      background-color: #333;
+      /* Fallback background */
+      font-family: Arial, sans-serif;
+      color: white;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      touch-action: none;
+      /* Prevent scrolling on touch devices */
+    }
+
+    /* The Glass Container */
+    #glass-container {
+      width: 60vmin;
+      /* Responsive width based on viewport smaller dimension */
+      max-width: 300px;
+      height: 80vmin;
+      max-height: 500px;
+      border: 5px solid rgba(255, 255, 255, 0.3);
+      border-bottom-left-radius: 30px;
+      border-bottom-right-radius: 30px;
+      border-top: none;
+      position: relative;
+      overflow: hidden;
+      /* Important for the liquid effect */
+      background-color: rgba(200, 200, 220, 0.1);
+      /* Slight glass tint */
+      box-shadow: 0 10px 20px rgba(0, 0, 0, 0.2);
+      display: none;
+      /* Hidden initially, shown on start */
+    }
+
+    /* The Beer Liquid */
+    #beer-liquid {
+      position: absolute;
+      bottom: 0;
+      left: -50%;
+      /* Allow for tilting without showing edges */
+      width: 200%;
+      /* Wider than container to allow tilt */
+      height: 75%;
+      /* Fill level */
+      background: linear-gradient(to bottom, #fbb03b, #f7931e);
+      /* Beer color gradient */
+      opacity: 0.9;
+      transform-origin: 50% 100%;
+      /* Pivot from center bottom */
+      transition: transform 0.1s linear;
+      /* Smooth transition for sloshing */
+    }
+
+    /* Message Display (for accelerometer values or errors) */
+    #info-display {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background-color: rgba(0, 0, 0, 0.7);
+      color: white;
+      padding: 15px 25px;
+      border-radius: 8px;
+      text-align: center;
+      font-size: 16px;
+      z-index: 10;
+      line-height: 1.6;
+      display: block;
+      /* Shown by default for the start button */
+    }
+
+    /* No-JS Message */
+    .no-script-message {
+      padding: 20px;
+      background-color: #ffdddd;
+      color: #a00;
+      border: 1px solid #a00;
+      text-align: center;
+    }
+  </style>
+</head>
+
+<body>
+  <noscript>
+    <div class="no-script-message">
+      <h1>JavaScript Required</h1>
+      <p>This application requires JavaScript to function. Please enable JavaScript in your browser settings.</p>
+    </div>
+  </noscript>
+
+  <div id="glass-container" role="img" aria-label="Animated simulation of a glass of beer reacting to device tilt">
+    <div id="beer-liquid"></div>
+  </div>
+
+  <div id="info-display">
+    <!-- Initial content will be set by JS -->
+  </div>
+
+  <script type="module">
+    const registerServiceWorker = async () => {
+      if ('serviceWorker' in navigator) {
+        try {
+          const registration = await navigator.serviceWorker.register(
+            '/sw.js',
+            {
+              scope: './',
+            }
+          );
+          if (registration.installing) {
+            console.log('Service worker installing');
+          } else if (registration.waiting) {
+            console.log('Service worker installed');
+          } else if (registration.active) {
+            console.log('Service worker active');
+          }
+        } catch (error) {
+          console.error(`Registration failed with ${error}`);
+        }
+      }
+    };
+    registerServiceWorker();
+    const beerLiquid = document.getElementById('beer-liquid');
+    const infoDisplay = document.getElementById('info-display');
+    const glassContainer = document.getElementById('glass-container');
+
+    // Configuration
+    const MAX_TILT_ANGLE_X = 35;
+    const MAX_TILT_ANGLE_Z = 45;
+    const SENSITIVITY_MULTIPLIER = 5;
+    const SENSOR_FREQUENCY = 60; // Hz for Generic Sensor API
+
+    let acl = null; // For Generic Sensor API
+    let hasReceivedMotionData = false;
+    let activeSensorType = null; // 'GenericSensorAPI' or 'DeviceMotionEvent'
+
+    function displayMessage(message, isError = false) {
+      infoDisplay.innerHTML = message;
+      infoDisplay.style.display = 'block';
+      infoDisplay.style.color = isError ? '#ffdddd' : 'white';
+      if (isError && glassContainer) {
+        glassContainer.style.display = 'none';
+      }
+    }
+
+    // Handler for Generic Sensor API's 'reading' event
+    function handleGenericSensorReading() {
+      if (!acl || acl.x === null || acl.y === null || acl.z === null) {
+        if (!hasReceivedMotionData) displayMessage("Generic sensor data is null. Ensure HTTPS.", true);
+        return;
+      }
+      // IMPORTANT: Generic `Accelerometer` usually reports acceleration WITHOUT gravity.
+      // For the current liquid simulation, we need a vector that represents the "down" direction.
+      // `DeviceMotionEvent.accelerationIncludingGravity` provides this.
+      // To get a similar effect with Generic Sensors, one would typically use:
+      // 1. `AbsoluteOrientationSensor` (if available, gives orientation quaternion/matrix)
+      // 2. Combine `Accelerometer` (proper acceleration) with `GravitySensor`.
+      // For this demo, we will use acl.x and acl.y directly, which will behave
+      // differently than `DeviceMotionEvent`'s `accelerationIncludingGravity`.
+      // It will react to *changes* in motion more than static tilt, unless the device
+      // is held very still, in which case the residual sensor noise might be interpreted as tilt.
+      // This part would need significant revision for accurate physics with Generic Sensors.
+      // For now, we pass them as if they were `accelerationIncludingGravity` for visual effect.
+      processMotionData(acl.x, acl.y, acl.z, 'GenericSensor');
+    }
+
+    // Handler for DeviceMotionEvent
+    function handleDeviceMotionEvent(event) {
+      if (!event.accelerationIncludingGravity ||
+        (event.accelerationIncludingGravity.x === null &&
+          event.accelerationIncludingGravity.y === null &&
+          event.accelerationIncludingGravity.z === null)) {
+        if (!hasReceivedMotionData) displayMessage("DeviceMotionEvent data is null. Ensure HTTPS.", true);
+        return;
+      }
+      const acc = event.accelerationIncludingGravity;
+      processMotionData(acc.x, acc.y, acc.z, 'DeviceMotionEvent');
+    }
+
+
+    async function tryGenericSensorAPI() {
+      if (!('Accelerometer' in window)) {
+        console.log("Generic Accelerometer API not supported.");
+        return false; // API not present
+      }
+
+      try {
+        // Query permission first for 'accelerometer'
+        const permissionStatus = await navigator.permissions.query({name: 'accelerometer'});
+        console.log("Generic Sensor 'accelerometer' permission state:", permissionStatus.state);
+
+        if (permissionStatus.state === 'denied') {
+          displayMessage("Accelerometer access denied (Generic Sensor). Check browser settings. Requires HTTPS.", true);
+          return false; // Permission explicitly denied
+        }
+
+        // If 'granted' or 'prompt', try to instantiate
+        // The constructor itself might trigger a prompt if state is 'prompt'
+        acl = new Accelerometer({frequency: SENSOR_FREQUENCY});
+
+        acl.addEventListener('activate', () => {
+          console.log('Generic Accelerometer activated.');
+          // Message will be updated on first reading
+        });
+
+        acl.addEventListener('error', (event) => {
+          console.error(`Generic Accelerometer error:,${event.error.name}\n ${event.error}`);
+          // If Generic Sensor fails, try to fallback
+          if (activeSensorType !== 'DeviceMotionEvent') { // Avoid infinite loops if fallback also fails
+            displayMessage(`Generic Accelerometer Error: ${event.error.name} - ${event.error.message}. Trying fallback. Ensure HTTPS.`, true);
+            acl = null; // Clear faulty sensor
+            tryDeviceMotionEvent(); // Attempt fallback
+          } else {
+            displayMessage(`Generic Accelerometer Error: ${event.error.name} - ${event.error.message}. Fallback also failed. Ensure HTTPS.`, true);
+          }
+        });
+
+        acl.addEventListener('reading', handleGenericSensorReading);
+        await acl.start();
+        activeSensorType = 'GenericSensorAPI';
+        console.log("Generic Accelerometer started.");
+        // displayMessage("Using Generic Sensor API. Tilt your device!", false); // Message handled in processMotionData
+        return true; // Successfully started
+
+      } catch (error) {
+        console.error("Error initializing Generic Accelerometer:", error);
+        if (error.name === 'NotAllowedError') {
+          displayMessage("Permission denied for Generic Accelerometer. Check browser settings and ensure HTTPS.", true);
+        } else if (error.name === 'NotReadableError' || error.name === 'NotFoundError') {
+          displayMessage("Generic Accelerometer not available or readable. Ensure HTTPS. Trying fallback.", true);
+        } else {
+          displayMessage(`Generic Accelerometer setup failed: ${error.name} - ${error.message}. Ensure HTTPS. Trying fallback.`, true);
+        }
+        acl = null; // Clear on error
+        return false; // Failed to start
+      }
+    }
+
+    async function tryDeviceMotionEvent() {
+      console.log("Attempting to use DeviceMotionEvent as fallback.");
+      activeSensorType = 'DeviceMotionEvent'; // Tentatively set
+
+      // iOS 13+ specific permission
+      if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+        try {
+          const permissionState = await DeviceMotionEvent.requestPermission();
+          if (permissionState === 'granted') {
+            window.addEventListener('devicemotion', handleDeviceMotionEvent, {passive: true});
+            // displayMessage("Using DeviceMotionEvent (iOS). Tilt your device!", false);
+          } else {
+            displayMessage("Permission for DeviceMotionEvent denied (iOS). Check Safari settings.", true);
+            activeSensorType = null;
+          }
+        } catch (error) {
+          displayMessage(`DeviceMotionEvent permission error (iOS): ${error.message}. Ensure HTTPS.`, true);
+          activeSensorType = null;
+        }
+      } else if ('DeviceMotionEvent' in window) {
+        // For other browsers or older iOS
+        window.addEventListener('devicemotion', handleDeviceMotionEvent, {passive: true});
+        // displayMessage("Using DeviceMotionEvent. Tilt your device!", false);
+        // Add a timeout to check if data is actually flowing, as there's no explicit start/permission for some
+        setTimeout(() => {
+          if (!hasReceivedMotionData && activeSensorType === 'DeviceMotionEvent') {
+            displayMessage("DeviceMotionEvent active, but no data received. Ensure sensor is enabled and page is HTTPS.", true);
+            // Consider stopping or flagging activeSensorType = null if still no data.
+          }
+        }, 3000);
+
+      } else {
+        displayMessage("Neither Generic Sensor API nor DeviceMotionEvent is supported.", true);
+        activeSensorType = null;
+      }
+    }
+    let fluidWorker = null;
+    let workerReady = false;
+
+    function initializeFluidWorker() {
+      if (window.Worker) {
+        displayMessage("Initializing WASM fluid simulation worker...", false);
+        // Vite handles worker imports with `new URL(...)`
+        fluidWorker = new Worker(new URL('./src/fluid.worker.js', import.meta.url), {type: 'module'});
+
+        fluidWorker.onmessage = (event) => {
+          const {type, payload} = event.data;
+          switch (type) {
+            case 'WORKER_READY':
+              workerReady = true;
+              console.log("Main: Fluid worker signaled READY:", payload);
+              displayMessage("WASM Simulation Ready. Tilt your device!", false);
+              break;
+            case 'FLUID_STATE_UPDATE':
+              if (payload) { // payload is the FluidState object from Rust
+                // Update CSS transform based on angles from WASM
+                if (typeof payload.tilt_x_deg === 'number' && typeof payload.tilt_z_deg === 'number') {
+                  beerLiquid.style.transform = `rotateZ(${payload.tilt_z_deg}deg) rotateX(${payload.tilt_x_deg}deg)`;
+                }
+
+                // For debugging particle data from WASM
+                // console.log("Particles:", payload.particles);
+
+                // Update info display (can show both sensor and WASM state)
+                let currentInfo = infoDisplay.innerHTML.split('<hr>')[0]; // Preserve sensor data if already shown
+                if (currentInfo.includes("Source:")) { // if sensor data is already there
+                  infoDisplay.innerHTML = `${currentInfo}<hr>WASM Tilt: X=${payload.tilt_x_deg.toFixed(1)}°, Z=${payload.tilt_z_deg.toFixed(1)}°`;
+                } else {
+                  infoDisplay.innerHTML = `WASM Tilt: X=${payload.tilt_x_deg.toFixed(1)}°, Z=${payload.tilt_z_deg.toFixed(1)}°`;
+                }
+
+              }
+              break;
+            case 'WORKER_ERROR':
+              console.error("Main: Error from fluid worker:", payload);
+              displayMessage(`Fluid Worker Error: ${payload}`, true);
+              workerReady = false;
+              break;
+            default:
+              console.log("Main: Message from worker:", event.data);
+          }
+        };
+
+        fluidWorker.onerror = (error) => {
+          console.error("Main: Error in fluid worker instantiation/loading:", error);
+          displayMessage(`Error loading/running fluid worker: ${error.message}. Check console.`, true);
+          workerReady = false;
+        };
+
+        // Send an initial message to the worker to start its WASM loading.
+        fluidWorker.postMessage({type: 'INIT_WORKER'});
+
+      } else {
+        displayMessage("Web Workers not supported. Cannot run WASM simulation.", true);
+      }
+    }
+
+    // Modify processMotionData to send to worker if ready
+    function processMotionData(x, y, z, source) {
+      if (!hasReceivedMotionData) {
+        console.log(`First valid motion data received from ${source}.`);
+        // Initial message will be set by worker or sensor status
+      }
+      hasReceivedMotionData = true;
+
+      const sensorDataMessage = `Source: ${source}<br>
+                                 X: ${x.toFixed(2)}, Y: ${y.toFixed(2)}, Z: ${z.toFixed(2)}`;
+
+      let infoContent = sensorDataMessage;
+      if (workerReady && fluidWorker) {
+        fluidWorker.postMessage({
+          type: 'ACCELEROMETER_DATA',
+          payload: {x, y, z} // This object will be serialized to JsValue for Rust
+        });
+        // Worker will send FLUID_STATE_UPDATE, which will update the tilt display
+      } else {
+        // Fallback or if worker not ready, maybe use old JS tilt? For now, just display sensor.
+        // For simplicity, if worker isn't ready, we won't tilt.
+        infoContent += "<br>(WASM Worker not ready for simulation)";
+      }
+      // Display sensor data immediately, WASM data will append or replace part of it via its own message
+      if (!infoDisplay.innerHTML.includes("WASM Tilt:")) { // Avoid overwriting WASM part if it's there
+        displayMessage(infoContent, false);
+      } else {
+        const wasmPart = infoDisplay.innerHTML.split('<hr>')[1] || '';
+        displayMessage(sensorDataMessage + (wasmPart ? `<hr>${wasmPart}` : ''), false);
+      }
+
+
+      // If worker isn't handling the tilt, you might want to call the JS version as a fallback
+      // if (!workerReady) {
+      //    updateLiquidTilt(x, y); // This function would need to be reinstated
+      // }
+    }
+
+
+    // Modify requestMotionAccess to also initialize the worker
+    async function requestMotionAccess() {
+      if (glassContainer) glassContainer.style.display = 'block';
+      displayMessage("Requesting sensor access & preparing simulation... Ensure HTTPS.", false);
+
+      // Initialize the worker - this happens in parallel with sensor permission
+      initializeFluidWorker();
+
+      const genericSensorSuccess = await tryGenericSensorAPI();
+      if (!genericSensorSuccess && !activeSensorType) { // Check activeSensorType to avoid double-dipping if GSA failed but set it
+        await tryDeviceMotionEvent();
+      }
+
+      if (!activeSensorType && !hasReceivedMotionData) {
+        // displayMessage("Could not initialize any motion sensor.", true); // Might be too aggressive if worker is still loading
+      }
+    }
+
+    // --- Initialization --- (Button remains the same)
+    displayMessage(`
+            <button id="startBtn" style="padding: 10px 15px; font-size: 1em; cursor: pointer;">
+                Pour Beer (Enable Motion Sensors & WASM Sim)
+            </button>
+            <p style="font-size: 0.8em; margin-top: 10px;">
+                Uses device sensors & WebAssembly.<br>
+                Requires HTTPS.
+            </p>
+        `, false);
+
+    const startButton = document.getElementById('startBtn');
+    if (startButton) {
+      startButton.onclick = () => {
+        requestMotionAccess(); // This will now also init the worker
+      };
+    } else {
+      console.error("Start button not found on init.");
+      displayMessage("Initialization error: Start button missing.", true);
+    }
+  </script>
+</body>
+
 </html>

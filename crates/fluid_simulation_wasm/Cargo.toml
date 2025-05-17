@@ -1,0 +1,27 @@
+[package]
+name = "fluid_simulation_wasm"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+cfg-if = "1.0.0"
+wasm-bindgen = "0.2.87"                            # Use a recent version
+serde = { version = "1.0", features = ["derive"] }
+serde-wasm-bindgen = "0.6"                         # For easier JSValue conversion
+# For simple console logging from Rust (optional, good for debugging)
+console_error_panic_hook = { version = "0.1.7", optional = true }
+wee_alloc = { version = "0.4.5", optional = true }                # For smaller WASM size
+
+[dev-dependencies]
+wasm-bindgen-test = "0.3.13"
+
+[features]
+default = ["console_error_panic_hook", "wee_alloc"]
+
+[profile.release]
+# Tell `rustc` to optimize for small code size.
+opt-level = "s"
+lto = true
