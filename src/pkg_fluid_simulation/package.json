@@ -1,0 +1,15 @@
+{
+  "name": "fluid_simulation_wasm",
+  "type": "module",
+  "version": "0.1.0",
+  "files": [
+    "fluid_simulation_wasm_bg.wasm",
+    "fluid_simulation_wasm.js",
+    "fluid_simulation_wasm.d.ts"
+  ],
+  "main": "fluid_simulation_wasm.js",
+  "types": "fluid_simulation_wasm.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}
